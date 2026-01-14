@@ -1,6 +1,6 @@
 #include <Arduino.h>
 #include <Wire.h>
-#include <U8g2lib.h>
+
 #include "esp_timer.h"
 #include <deque>
 
@@ -10,11 +10,44 @@
 #define SCREEN_WIDTH 72
 #define SCREEN_HEIGHT 40
 #define OLED_ADDR 0x3C
-#define SDA 5
-#define SCL 6 
+
 
 // Use this constructor (matches user's working sample)
-U8G2_SH1106_72X40_WISE_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE, SCL, SDA);
+#ifdef SeeedXiao
+
+  #include <Adafruit_GFX.h>
+  #include <Adafruit_SSD1306.h>
+  #define WIRE Wire
+  #define SDA 9
+  #define SCL 10 
+  #define OLED_ADDR 0x3C
+  
+  // Derived class to add drawStr clearbuffer sendBuffer member functions
+  class MyDisplay : public Adafruit_SSD1306 {
+  public:
+    MyDisplay(uint16_t w, uint16_t h) : Adafruit_SSD1306(w, h) {}
+      void drawStr(uint8_t hor, uint8_t ver, const char * str) {
+      setCursor(hor, ver);
+      print(str);
+    }
+    void clearBuffer(void) {
+      clearDisplay();
+    }
+    void sendBuffer(void) {
+      display();
+    }
+  };
+  
+  MyDisplay display = MyDisplay(128, 64);
+
+#endif 
+#ifdef Abrobot
+#include <U8g2lib.h>
+#define SDA 5
+#define SCL 6 
+// Use this constructor (matches user's working sample)
+U8G2_SH1106_72X40_WISE_F_HW_I2C display(U8G2_R0, U8X8_PIN_NONE, SCL, SDA);
+#endif
 
 
 portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
@@ -57,12 +90,24 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(PWM_Input_PIN), signal_isr, CHANGE); // activate measurement ISR
   Serial.println("Measurement Interrupt attached");
   delay(200);
-
-  u8g2.begin();
-  u8g2.setContrast(255);
-  u8g2.setFont(u8g2_font_6x10_tr);
-  u8g2.firstPage();
-  u8g2.drawStr(0, 0, "Servo Signal Tester");
+#ifdef SeeedXiao
+  WIRE.begin(SDA,SCL);
+  delay(100);
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C); // Address 0x3C for 128x32
+  display.display();
+  delay(1000);
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextSize(1);
+  display.clearDisplay();
+  display.display();
+#endif
+#ifdef Abrobot
+  display.begin();
+  display.setContrast(255);
+  display.setFont(u8g2_font_6x10_tr);
+  display.firstPage();
+  display.drawStr(0, 0, "Servo Signal Tester");
+#endif
   delay(1000);
 
   Serial.println("Display setup & complete setup() done");
@@ -138,19 +183,19 @@ void loop() {
   }
   Serial.println(printBuf);
 
-  u8g2.clearBuffer();
-  u8g2.setFont(u8g2_font_6x10_tr);
+
+  display.clearBuffer();
  
 //  snprintf(printBuf, sizeof(printBuf), "Pin:%d %s", PWM_Input_PIN, PWM_present?"YES":"NO");
   snprintf(printBuf, sizeof(printBuf), "PWM:%s", PWM_present?"YES":"NO");
-  u8g2.drawStr(0, 8, printBuf);
+  display.drawStr(0, 8, printBuf);
   snprintf(printBuf, sizeof(printBuf), "Pulse:%dus", (int)pulse);
-  u8g2.drawStr(0, 18, printBuf);
+  display.drawStr(0, 18, printBuf);
   snprintf(printBuf, sizeof(printBuf), "Prd:%dus Freq:%.2f", (int)period, freqHz);
-  u8g2.drawStr(0, 28, printBuf);
+  display.drawStr(0, 28, printBuf);
   snprintf(printBuf, sizeof(printBuf), "Avg10s:%.2fHz", avgFreq10);
-  u8g2.drawStr(0, 38, printBuf);
-  u8g2.sendBuffer();
+  display.drawStr(0, 38, printBuf);
+  display.sendBuffer();
 
   delay(150);
 }
