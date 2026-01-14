@@ -3,9 +3,10 @@
 #include <U8g2lib.h>
 #include "esp_timer.h"
 #include <deque>
-//#include <cstring>
 
-#define MEASURE_PIN 4 // default input pin for servo signal (change as needed)
+// Board used: Abrobot ESP32-C3 with tiny OLED https://www.espboards.dev/esp32/esp32-c3-oled-042/
+
+#define PWM_Input_PIN 4 // default input pin for servo signal (change as needed)
 #define SCREEN_WIDTH 72
 #define SCREEN_HEIGHT 40
 #define OLED_ADDR 0x3C
@@ -21,71 +22,71 @@ portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
 volatile int64_t lastRising = 0;     // timestamp of last rising edge (us)
 volatile int64_t lastPeriod = 0;     // period between last two rising edges (us)
 volatile int64_t lastPulseWidth = 0; // last measured pulse width (us)
-volatile bool sawSignal = false;
+volatile int64_t sawSignalLast = 0;   // timestamp of last sawSignal (us)
 
 // Samples of (timestamp_us, period_us) for last 60 seconds
 std::deque<std::pair<int64_t,int64_t>> periodSamples;
 int64_t lastLoggedPeriod = 0;
 
-void IRAM_ATTR signal_isr() {
-  int level = digitalRead(MEASURE_PIN);
+void IRAM_ATTR signal_isr() {   // interrupt service routine to measure PWM period and PWM Pulse high width
+  int level = digitalRead(PWM_Input_PIN);
   int64_t now = esp_timer_get_time();
   portENTER_CRITICAL_ISR(&mux);
   if (level == HIGH) {
     if (lastRising != 0) {
-      lastPeriod = now - lastRising;
+      lastPeriod = now - lastRising;    // lastPeriod is the time between last two rising edges = result(period)
     }
     lastRising = now;
-    sawSignal = true;
+    sawSignalLast = now;
   } else {
     // falling edge -> pulse width
     if (lastRising != 0) {
-      lastPulseWidth = now - lastRising;
-      sawSignal = true;
+      lastPulseWidth = now - lastRising; // lastPulseWidth is the time between rising and falling edge = result(pulse width)
+      sawSignalLast = now;
     }
   }
   portEXIT_CRITICAL_ISR(&mux);
 }
 
 void setup() {
-  // initialize I2C on SDA=GPIO5, SCL=GPIO6
-  //Wire.begin(SDA, SCL ); is obsolte and conflicting with OLED
+
   Serial.begin(115200);
   delay(100);
   Serial.println("Starting setup() in Servo Signal Analyzer");
-  pinMode(MEASURE_PIN, INPUT);
-  attachInterrupt(digitalPinToInterrupt(MEASURE_PIN), signal_isr, CHANGE);
+  pinMode(PWM_Input_PIN, INPUT);
+  attachInterrupt(digitalPinToInterrupt(PWM_Input_PIN), signal_isr, CHANGE); // activate measurement ISR
   Serial.println("Measurement Interrupt attached");
   delay(200);
 
   u8g2.begin();
   u8g2.setContrast(255);
-  //delay(1000);
-  //u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tr);
-  //u8g2.setFont(u8g2_font_ncenB08_tr);
   u8g2.firstPage();
-  u8g2.drawStr(0, 10, "Servo Signal Analyzer");
-  //u8g2.sendBuffer();
-  delay(100);
+  u8g2.drawStr(0, 0, "Servo Signal Tester");
+  delay(1000);
 
-//  u8g2.nextPage();
   Serial.println("Display setup & complete setup() done");
 }
 
 void loop() {
-  int64_t period, pulse;
-  bool present;
-  portENTER_CRITICAL(&mux);
+  int64_t period, pulse,last_PWM_Edge;
+  bool PWM_present=false;
+  char printBuf[128]="";
+  int64_t now = esp_timer_get_time();
+
+  portENTER_CRITICAL(&mux); // start critical section to safely read volatile variables - block measurement ISR
   period = lastPeriod;
   pulse = lastPulseWidth;
-  present = sawSignal;
-  portEXIT_CRITICAL(&mux);
+  last_PWM_Edge = sawSignalLast;
+  portEXIT_CRITICAL(&mux); // end critical section -  unblock measurement ISR
+
+  now = esp_timer_get_time();
+  PWM_present = (now - last_PWM_Edge < 2000000LL); // signal PWM_present if seen within last 2 second
+ 
 
   float freqHz = 0.0;
   if (period > 0) freqHz = 1000000.0f / (float)period;
 
-  int64_t now = esp_timer_get_time();
   if (period > 0 && period != lastLoggedPeriod) {
     periodSamples.emplace_back(now, period);
     lastLoggedPeriod = period;
@@ -112,49 +113,43 @@ void loop() {
     int64_t avgPeriod10 = sumPeriod10 / (int64_t)count10;
     if (avgPeriod10 > 0) avgFreq10 = 1000000.0f / (float)avgPeriod10;
   }
-/*
-  char pulseBuf[16];
-  if (pulse > 0) {
-    if (pulse < 10000) sprintf(pulseBuf, "%04lld", (long long)pulse);
-    else sprintf(pulseBuf, "%lld", (long long)pulse);
-  } else {
-    strncpy(pulseBuf, "--", sizeof(pulseBuf));
-    pulseBuf[sizeof(pulseBuf)-1] = '\0';
-  }
-*/
 
-// Limit the values to prevent display overrun
+
+// Limit the values to prevent display overrun & set default values when no PWM_present
   if (pulse > 2399) pulse=2399;
-  else if (pulse < 199) pulse=199;
-  if (period > 29999) period=29999;
+  else if ((pulse < 199)||!PWM_present) pulse=199;
+  if ((period > 29999)||!PWM_present) period=29999;
   else if (period < 999) period=999;
   if (freqHz > 999) freqHz=999;
-  else if (freqHz < 9) freqHz=9;  
+  else if ((freqHz < 9)||!PWM_present) freqHz=9;  
   if (avgFreq10 > 999) avgFreq10=999;
-  else if (avgFreq10 < 9) avgFreq10=99;
-  if (minPeriod > 29999) minPeriod=29999;
+  else if ((avgFreq10 < 9)||!PWM_present) avgFreq10=9;
+  if ((minPeriod > 29999)||!PWM_present) minPeriod=29999;
   else if (minPeriod < 999) minPeriod=999;
-  if (maxPeriod > 29999) maxPeriod=29999;
+  if ((maxPeriod > 29999)||!PWM_present) maxPeriod=29999;
   else if (maxPeriod < 999) maxPeriod=999;
-  
 
-
-  char out[128];
-  sprintf(out, "Pulse=%5dus Period=%6dus Freq=%6.2fHz Avg10s=%6.2fHz Min60s=%6dus Max60s=%6dus",
-          (int) pulse, (int)period, freqHz, avgFreq10, (int)minPeriod, (int)maxPeriod);
-  Serial.println(out);
+  if (PWM_present) {
+    sprintf(printBuf, "   Pulse=%5dus Period=%6dus Freq=%6.2fHz Avg10s=%6.2fHz Min60s=%6dus Max60s=%6dus",
+            (int) pulse, (int)period, freqHz, avgFreq10, (int)minPeriod, (int)maxPeriod);
+  } else {
+    sprintf(printBuf, "NO Pulse=%5dus Period=%6dus Freq=%6.2fHz Avg10s=%6.2fHz Min60s=%6dus Max60s=%6dus",
+            (int) pulse, (int)period, freqHz, avgFreq10, (int)minPeriod, (int)maxPeriod);
+  }
+  Serial.println(printBuf);
 
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tr);
-  char buf[64];
-  snprintf(buf, sizeof(buf), "Pin:%d %s", MEASURE_PIN, present?"YES":"NO");
-  u8g2.drawStr(0, 8, buf);
-  snprintf(buf, sizeof(buf), "Pulse:%dus", (int)pulse);
-  u8g2.drawStr(0, 18, buf);
-  snprintf(buf, sizeof(buf), "Prd:%dus Freq:%.2f", (int)period, freqHz);
-  u8g2.drawStr(0, 28, buf);
-  snprintf(buf, sizeof(buf), "Avg10s:%.2fHz", avgFreq10);
-  u8g2.drawStr(0, 38, buf);
+ 
+//  snprintf(printBuf, sizeof(printBuf), "Pin:%d %s", PWM_Input_PIN, PWM_present?"YES":"NO");
+  snprintf(printBuf, sizeof(printBuf), "PWM:%s", PWM_present?"YES":"NO");
+  u8g2.drawStr(0, 8, printBuf);
+  snprintf(printBuf, sizeof(printBuf), "Pulse:%dus", (int)pulse);
+  u8g2.drawStr(0, 18, printBuf);
+  snprintf(printBuf, sizeof(printBuf), "Prd:%dus Freq:%.2f", (int)period, freqHz);
+  u8g2.drawStr(0, 28, printBuf);
+  snprintf(printBuf, sizeof(printBuf), "Avg10s:%.2fHz", avgFreq10);
+  u8g2.drawStr(0, 38, printBuf);
   u8g2.sendBuffer();
 
   delay(150);
