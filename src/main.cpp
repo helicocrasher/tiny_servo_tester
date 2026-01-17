@@ -30,6 +30,8 @@
   #define WIRE Wire
   #define SDA 9
   #define SCL 10 
+  #define SCREEN_WIDTH 128 // OLED display width, in pixels
+  #define SCREEN_HEIGHT 64 // OLED display height, in pixels
   #define PWM_Input_PIN 4 // default input pin for servo signal (change as needed)
   #define VOLTAGE_MEASURE_PIN A2 // analog input for voltage measurement
   #define SERVO_OUTPUT_PIN 7 // PWM output pin for servo control
@@ -56,8 +58,8 @@
   #include <U8g2lib.h>
   #define SDA 5
   #define SCL 6 
-  #define SCREEN_WIDTH 72
-  #define SCREEN_HEIGHT 40
+  #define SCREEN_WIDTH 72  // OLED display width, in pixels
+  #define SCREEN_HEIGHT 40 // OLED display height, in pixels
   #define PWM_Input_PIN 4 // default input pin for servo signal (change as needed)
   #define VOLTAGE_MEASURE_PIN A2 // analog input for voltage measurement
   #define SERVO_OUTPUT_PIN 7 // PWM output pin for servo control

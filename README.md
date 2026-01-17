@@ -1,9 +1,9 @@
 # Tiny Servo Signal Tester (ESP32-C3 / Abrobot)
 
 A comprehensive servo testing and signal analysis tool. This project measures incoming RC servo PWM signals, generates servo PWM output with adjustable modes, and monitors supply voltage.
-Two Hrdware options are supported at this time
+Two Hardware options are supported at this time
 -  Abrobot ESP32-C3 board with built-in OLED display. (not all output is visible - its so small)
--  Seeed Xiao ESP32-C3 plus Adafruit SSD1306 OLED display
+-  Seeed Xiao ESP32-C3 plus Adafruit SSD1306 OLED display (128x64 pixels)
 
 ## Features
 
