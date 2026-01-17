@@ -4,23 +4,35 @@
 #include <deque>
 
 // Board used: Abrobot ESP32-C3 with tiny OLED https://www.espboards.dev/esp32/esp32-c3-oled-042/
+//             or Seeed Xiao ESP32 C3 with Adafruit_SSD1306 display
+//
+// Define the board in platformio.ini to select the correct display library and pin definitions
+// [e.g., env:esp32-c3-Abrobot-OLED or env:esp32-c3-Seeed_Xiao]
 
-#define PWM_Input_PIN 4 // default input pin for servo signal (change as needed)
-#define SCREEN_WIDTH 72
-#define SCREEN_HEIGHT 40
+#define SERVO_PWM_FREQ 50 // 50 Hz servo frequency
+#define SERVO_PERIOD_US 20000 // 20ms period for 50Hz (1000000/50)
+#define SERVO_MIN_PULSE 1000 // minimum pulse width in microseconds
+#define SERVO_CENTER_PULSE 1500 // center position in microseconds
+#define SERVO_MAX_PULSE 2000 // maximum pulse width in microseconds
+#define SERVO_SWEEP_TIME_MS 2000 // 2 seconds for full sweep
+#define BOOT_BUTTON_PIN 9 // ESP32-C3 boot button pin
+//#define SCREEN_WIDTH 72
+//#define SCREEN_HEIGHT 40
 #define OLED_ADDR 0x3C
+#define VOLTAGE_MEASURE_RATE_HZ 4 // 4 Hz measurement rate
+#define VOLTAGE_DIVIDER_RATIO 3.6f // voltage divider ratio for A2 adjust this based on your resistor values and measurement
 
 
 
-#ifdef SeeedXiao // with Adafruit_SSD1306 display
-
+#ifdef SeeedXiao // Seeed Xiao ESP32 C3 with Adafruit_SSD1306 display
   #include <Adafruit_GFX.h>
   #include <Adafruit_SSD1306.h>
   #define WIRE Wire
   #define SDA 9
   #define SCL 10 
-
-  
+  #define PWM_Input_PIN 4 // default input pin for servo signal (change as needed)
+  #define VOLTAGE_MEASURE_PIN A2 // analog input for voltage measurement
+  #define SERVO_OUTPUT_PIN 7 // PWM output pin for servo control
   // Derived class to add drawStr clearbuffer sendBuffer member functions
   class MyDisplay : public Adafruit_SSD1306 {
   public:
@@ -36,18 +48,21 @@
       display();
     }
   };
-  
   MyDisplay display = MyDisplay(128, 64);
-
 #endif 
+
+
 #ifdef Abrobot
-#include <U8g2lib.h>
-#define SDA 5
-#define SCL 6 
-#define SCREEN_WIDTH 72
-#define SCREEN_HEIGHT 40
+  #include <U8g2lib.h>
+  #define SDA 5
+  #define SCL 6 
+  #define SCREEN_WIDTH 72
+  #define SCREEN_HEIGHT 40
+  #define PWM_Input_PIN 4 // default input pin for servo signal (change as needed)
+  #define VOLTAGE_MEASURE_PIN A2 // analog input for voltage measurement
+  #define SERVO_OUTPUT_PIN 7 // PWM output pin for servo control
 // Use this constructor for Abrobot Display
-U8G2_SH1106_72X40_WISE_F_HW_I2C display(U8G2_R0, U8X8_PIN_NONE, SCL, SDA);
+  U8G2_SH1106_72X40_WISE_F_HW_I2C display(U8G2_R0, U8X8_PIN_NONE, SCL, SDA);
 #endif
 
 
@@ -61,6 +76,19 @@ volatile int64_t sawSignalLast = 0;   // timestamp of last sawSignal (us)
 // Samples of (timestamp_us, period_us) for last 60 seconds
 std::deque<std::pair<int64_t,int64_t>> periodSamples;
 int64_t lastLoggedPeriod = 0;
+
+// Voltage measurement variables
+volatile float lastMeasuredVoltage = 0.0f;
+int64_t lastVoltageMeasureTime = 0;
+int64_t voltageMeasureInterval = 1000000LL / VOLTAGE_MEASURE_RATE_HZ; // microseconds between measurements
+
+// Servo output variables
+int servoMode = 1; // 1 = fixed center, 2 = sweep
+volatile int servoPulseWidth = SERVO_CENTER_PULSE; // current servo pulse width in microseconds
+int64_t lastBootButtonCheck = 0;
+int64_t bootButtonCheckInterval = 100000LL; // 100ms debounce interval
+bool lastBootButtonState = HIGH;
+int64_t servoSweepStartTime = 0;
 
 void IRAM_ATTR signal_isr() {   // interrupt service routine to measure PWM period and PWM Pulse high width
   int level = digitalRead(PWM_Input_PIN);
@@ -82,14 +110,86 @@ void IRAM_ATTR signal_isr() {   // interrupt service routine to measure PWM peri
   portEXIT_CRITICAL_ISR(&mux);
 }
 
+float measureVoltage() {
+  // Read ADC value from pin A2 (0-4095 for ESP32)
+  int rawValue = analogRead(VOLTAGE_MEASURE_PIN);
+  // ESP32 uses 12-bit ADC, full scale is typically 3.3V (or higher with attenuation)
+  // Convert to voltage: rawValue / 4095 * 3.3V * voltage_divider_ratio
+  float voltage = (rawValue / 4095.0f) * 3.3f * VOLTAGE_DIVIDER_RATIO;
+  return voltage;
+}
+
+void updateServoOutput() {
+  // Calculate servo pulse width based on mode
+  int64_t now = esp_timer_get_time();
+  
+  if (servoMode == 1) {
+    // Mode 1: Fixed center position (1500us)
+    servoPulseWidth = SERVO_CENTER_PULSE;
+  } else if (servoMode == 2) {
+    // Mode 2: Sweep from 1000us to 2000us and back in 2 seconds
+    int64_t elapsedMs = (now - servoSweepStartTime) / 1000LL;
+    int64_t sweepCycleMs = SERVO_SWEEP_TIME_MS * 2; // up and down = 2 cycles
+    int64_t positionInCycle = elapsedMs % sweepCycleMs;
+    
+    if (positionInCycle < SERVO_SWEEP_TIME_MS) {
+      // Sweep up from MIN to MAX
+      float progress = (float)positionInCycle / (float)SERVO_SWEEP_TIME_MS;
+      servoPulseWidth = SERVO_MIN_PULSE + (int)(progress * (SERVO_MAX_PULSE - SERVO_MIN_PULSE));
+    } else {
+      // Sweep down from MAX to MIN
+      float progress = (float)(positionInCycle - SERVO_SWEEP_TIME_MS) / (float)SERVO_SWEEP_TIME_MS;
+      servoPulseWidth = SERVO_MAX_PULSE - (int)(progress * (SERVO_MAX_PULSE - SERVO_MIN_PULSE));
+    }
+  }
+}
+
+void checkBootButtonMode() {
+  // Check boot button for mode switching (debounced)
+  int64_t now = esp_timer_get_time();
+  if (now - lastBootButtonCheck >= bootButtonCheckInterval) {
+    lastBootButtonCheck = now;
+    bool buttonState = digitalRead(BOOT_BUTTON_PIN);
+    
+    // Detect falling edge (button pressed)
+    if (buttonState == LOW && lastBootButtonState == HIGH) {
+      // Mode switch
+      if (servoMode == 1) {
+        servoMode = 2;
+        servoSweepStartTime = now;
+        Serial.println("Servo Mode switched to 2: SWEEP");
+      } else {
+        servoMode = 1;
+        Serial.println("Servo Mode switched to 1: CENTER");
+      }
+    }
+    lastBootButtonState = buttonState;
+  }
+}
+
 void setup() {
 
   Serial.begin(115200);
   delay(100);
   Serial.println("Starting setup() in Servo Signal Analyzer");
   pinMode(PWM_Input_PIN, INPUT);
+  pinMode(VOLTAGE_MEASURE_PIN, INPUT);
+  pinMode(BOOT_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(SERVO_OUTPUT_PIN, OUTPUT);
+  
+  // Configure PWM for servo output on pin 7
+  // Using ledcSetup and ledcAttachPin for ESP32 PWM
+  // Use 10-bit resolution (0-1023) for better frequency compatibility at 50Hz
+  ledcSetup(0, SERVO_PWM_FREQ, 10); // channel 0, 50Hz, 10-bit resolution
+  ledcAttachPin(SERVO_OUTPUT_PIN, 0);
+  ledcWrite(0, 75); // Initial 1500us pulse = 1500/20000 * 1024 = 76.8
+  // Set initial servo position
+  servoPulseWidth = SERVO_CENTER_PULSE;
+  servoSweepStartTime = esp_timer_get_time();
+  
   attachInterrupt(digitalPinToInterrupt(PWM_Input_PIN), signal_isr, CHANGE); // activate measurement ISR
   Serial.println("Measurement Interrupt attached");
+  Serial.println("Servo output configured on pin 7 at 50Hz");
   delay(200);
 #ifdef SeeedXiao
   WIRE.begin(SDA,SCL);
@@ -120,6 +220,25 @@ void loop() {
   bool PWM_present=false;
   char printBuf[128]="";
   int64_t now = esp_timer_get_time();
+
+  // Check boot button for mode switching
+  checkBootButtonMode();
+  
+  // Update servo output
+  updateServoOutput();
+  
+  // Write servo PWM pulse using ledcWrite
+  // PWM duty = (pulse_width / period) * max_value
+  // For 10-bit resolution (max = 1023), and 20ms period:
+  // duty = (servoPulseWidth / 20000) * 1024
+  uint16_t dutyCycle = (uint16_t)((servoPulseWidth * 1024) / SERVO_PERIOD_US);
+  ledcWrite(0, dutyCycle);
+
+  // Voltage measurement at 4 Hz rate
+  if (now - lastVoltageMeasureTime >= voltageMeasureInterval) {
+    lastMeasuredVoltage = measureVoltage();
+    lastVoltageMeasureTime = now;
+  }
 
   portENTER_CRITICAL(&mux); // start critical section to safely read volatile variables - block measurement ISR
   period = lastPeriod;
@@ -177,15 +296,13 @@ void loop() {
   else if (maxPeriod < 999) maxPeriod=999;
 
   if (PWM_present) {
-    sprintf(printBuf, "   Pulse=%5dus Period=%6dus Freq=%6.2fHz Avg10s=%6.2fHz Min60s=%6dus Max60s=%6dus",
-            (int) pulse, (int)period, freqHz, avgFreq10, (int)minPeriod, (int)maxPeriod);
+    sprintf(printBuf, "   Pulse=%5dus Period=%6dus Freq=%6.2fHz Avg10s=%6.2fHz Min60s=%6dus Max60s=%6dus Voltage=%3.2fV | Servo: Mode=%d PulseOut=%dus",
+            (int) pulse, (int)period, freqHz, avgFreq10, (int)minPeriod, (int)maxPeriod, lastMeasuredVoltage, servoMode, servoPulseWidth);
   } else {
-    sprintf(printBuf, "NO Pulse=%5dus Period=%6dus Freq=%6.2fHz Avg10s=%6.2fHz Min60s=%6dus Max60s=%6dus",
-            (int) pulse, (int)period, freqHz, avgFreq10, (int)minPeriod, (int)maxPeriod);
+    sprintf(printBuf, "NO Pulse=%5dus Period=%6dus Freq=%6.2fHz Avg10s=%6.2fHz Min60s=%6dus Max60s=%6dus Voltage=%3.2fV | Servo: Mode=%d PulseOut=%dus",
+            (int) pulse, (int)period, freqHz, avgFreq10, (int)minPeriod, (int)maxPeriod, lastMeasuredVoltage, servoMode, servoPulseWidth);
   }
   Serial.println(printBuf);
-
-
   display.clearBuffer();
  
 
@@ -195,10 +312,13 @@ void loop() {
   display.drawStr(0, 18, printBuf);
   snprintf(printBuf, sizeof(printBuf), "Prd:%dus Freq:%.2f", (int)period, freqHz);
   display.drawStr(0, 28, printBuf);
-  snprintf(printBuf, sizeof(printBuf), "Avg10s:%.2fHz", avgFreq10);
+  snprintf(printBuf, sizeof(printBuf), "Avg10s:%.2fHz V:%3.2fV", avgFreq10);
   display.drawStr(0, 38, printBuf);
+  snprintf(printBuf, sizeof(printBuf), "Volt:%3.2fV M%d:%dus", lastMeasuredVoltage, servoMode, servoPulseWidth);
+  display.drawStr(0, 48, printBuf);
+
   display.sendBuffer();
 
-  delay(150);
+  delay(250); // 4 Hz update rate = 250ms between updates
 }
 
