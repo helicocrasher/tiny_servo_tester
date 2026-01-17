@@ -1,6 +1,5 @@
 #include <Arduino.h>
 #include <Wire.h>
-
 #include "esp_timer.h"
 #include <deque>
 
@@ -12,15 +11,15 @@
 #define OLED_ADDR 0x3C
 
 
-// Use this constructor (matches user's working sample)
-#ifdef SeeedXiao
+
+#ifdef SeeedXiao // with Adafruit_SSD1306 display
 
   #include <Adafruit_GFX.h>
   #include <Adafruit_SSD1306.h>
   #define WIRE Wire
   #define SDA 9
   #define SCL 10 
-  #define OLED_ADDR 0x3C
+
   
   // Derived class to add drawStr clearbuffer sendBuffer member functions
   class MyDisplay : public Adafruit_SSD1306 {
@@ -45,7 +44,9 @@
 #include <U8g2lib.h>
 #define SDA 5
 #define SCL 6 
-// Use this constructor (matches user's working sample)
+#define SCREEN_WIDTH 72
+#define SCREEN_HEIGHT 40
+// Use this constructor for Abrobot Display
 U8G2_SH1106_72X40_WISE_F_HW_I2C display(U8G2_R0, U8X8_PIN_NONE, SCL, SDA);
 #endif
 
@@ -95,10 +96,11 @@ void setup() {
   delay(100);
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C); // Address 0x3C for 128x32
   display.display();
-  delay(1000);
+  delay(100);
   display.setTextColor(SSD1306_WHITE);
   display.setTextSize(1);
   display.clearDisplay();
+  display.drawStr(0, 0, "Servo Signal Tester");
   display.display();
 #endif
 #ifdef Abrobot
@@ -186,7 +188,7 @@ void loop() {
 
   display.clearBuffer();
  
-//  snprintf(printBuf, sizeof(printBuf), "Pin:%d %s", PWM_Input_PIN, PWM_present?"YES":"NO");
+
   snprintf(printBuf, sizeof(printBuf), "PWM:%s", PWM_present?"YES":"NO");
   display.drawStr(0, 8, printBuf);
   snprintf(printBuf, sizeof(printBuf), "Pulse:%dus", (int)pulse);
