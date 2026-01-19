@@ -284,6 +284,7 @@ void loop() {
 
 
 // Limit the values to prevent display overrun & set default values when no PWM_present
+/**/
   if (pulse > 2399) pulse=2399;
   else if ((pulse < 199)||!PWM_present) pulse=199;
   if ((period > 29999)||!PWM_present) period=29999;
@@ -296,7 +297,7 @@ void loop() {
   else if (minPeriod < 999) minPeriod=999;
   if ((maxPeriod > 29999)||!PWM_present) maxPeriod=29999;
   else if (maxPeriod < 999) maxPeriod=999;
-
+/**/
   if (PWM_present) {
     sprintf(printBuf, "   Pulse=%5dus Period=%6dus Freq=%6.2fHz Avg10s=%6.2fHz Min60s=%6dus Max60s=%6dus Voltage=%3.2fV | Servo: Mode=%d PulseOut=%dus",
             (int) pulse, (int)period, freqHz, avgFreq10, (int)minPeriod, (int)maxPeriod, lastMeasuredVoltage, servoMode, servoPulseWidth);
@@ -306,19 +307,16 @@ void loop() {
   }
   Serial.println(printBuf);
   display.clearBuffer();
- 
-
   snprintf(printBuf, sizeof(printBuf), "PWM:%s", PWM_present?"YES":"NO");
   display.drawStr(0, 8, printBuf);
   snprintf(printBuf, sizeof(printBuf), "Pulse:%dus", (int)pulse);
   display.drawStr(0, 18, printBuf);
   snprintf(printBuf, sizeof(printBuf), "Prd:%dus Freq:%.2f", (int)period, freqHz);
   display.drawStr(0, 28, printBuf);
-  snprintf(printBuf, sizeof(printBuf), "Avg10s:%.2fHz V:%3.2fV", avgFreq10);
+  snprintf(printBuf, sizeof(printBuf), "Avg10s:%.2fHz", avgFreq10);
   display.drawStr(0, 38, printBuf);
   snprintf(printBuf, sizeof(printBuf), "Volt:%3.2fV M%d:%dus", lastMeasuredVoltage, servoMode, servoPulseWidth);
   display.drawStr(0, 48, printBuf);
-
   display.sendBuffer();
 
   delay(250); // 4 Hz update rate = 250ms between updates
