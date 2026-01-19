@@ -148,6 +148,11 @@ void updateServoOutput() {
       servoPulseWidth = SERVO_MAX_PULSE - (int)(progress * (SERVO_MAX_PULSE - SERVO_MIN_PULSE));
     }
   }
+    
+  // Write servo PWM pulse using ledcWrite
+  uint16_t dutyCycle = (uint16_t)((servoPulseWidth * 1024) / SERVO_PERIOD_US);
+  ledcWrite(0, dutyCycle);
+
 }
 
 void checkBootButtonMode() {
@@ -171,6 +176,55 @@ void checkBootButtonMode() {
     }
     lastBootButtonState = buttonState;
   }
+}
+
+void limitValues(int64_t &pulse, int64_t &period, float &freqHz, float &avgFreq10, int64_t &minPeriod, int64_t &maxPeriod, bool PWM_present) {
+  // Limit the values to prevent display overrun & set default values when no PWM_present
+  if (pulse > 2399) pulse = 2399;
+  else if ((pulse < 199) || !PWM_present) pulse = 199;
+  
+  if ((period > 29999) || !PWM_present) period = 29999;
+  else if (period < 999) period = 999;
+  
+  if (freqHz > 999) freqHz = 999;
+  else if ((freqHz < 9) || !PWM_present) freqHz = 9;
+  
+  if (avgFreq10 > 999) avgFreq10 = 999;
+  else if ((avgFreq10 < 9) || !PWM_present) avgFreq10 = 9;
+  
+  if ((minPeriod > 29999) || !PWM_present) minPeriod = 29999;
+  else if (minPeriod < 999) minPeriod = 999;
+  
+  if ((maxPeriod > 29999) || !PWM_present) maxPeriod = 29999;
+  else if (maxPeriod < 999) maxPeriod = 999;
+}
+
+void updateSerial(bool PWM_present, int64_t pulse, int64_t period, float freqHz, float avgFreq10, int64_t minPeriod, int64_t maxPeriod) {
+  // Output to serial
+  if (PWM_present) {
+    snprintf(printBuf, printBufSize, "   Pulse=%5dus Period=%6dus Freq=%6.2fHz Avg10s=%6.2fHz Min60s=%6dus Max60s=%6dus Voltage=%3.2fV | Servo: Mode=%d PulseOut=%dus",
+            (int)pulse, (int)period, freqHz, avgFreq10, (int)minPeriod, (int)maxPeriod, lastMeasuredVoltage, servoMode, servoPulseWidth);
+  } else {
+    snprintf(printBuf, printBufSize, "NO Pulse=%5dus Period=%6dus Freq=%6.2fHz Avg10s=%6.2fHz Min60s=%6dus Max60s=%6dus Voltage=%3.2fV | Servo: Mode=%d PulseOut=%dus",
+            (int)pulse, (int)period, freqHz, avgFreq10, (int)minPeriod, (int)maxPeriod, lastMeasuredVoltage, servoMode, servoPulseWidth);
+  }
+  Serial.println(printBuf);
+}
+
+void updateDisplay(bool PWM_present, int64_t pulse, int64_t period, float freqHz, float avgFreq10) {
+  // Update OLED display
+  display.clearBuffer();
+  snprintf(printBuf, printBufSize, "PWM:%s", PWM_present ? "YES" : "NO");
+  display.drawStr(0, 8, printBuf);
+  snprintf(printBuf, printBufSize, "Pulse:%dus", (int)pulse);
+  display.drawStr(0, 18, printBuf);
+  snprintf(printBuf, printBufSize, "Prd:%dus Freq:%.2f", (int)period, freqHz);
+  display.drawStr(0, 28, printBuf);
+  snprintf(printBuf, printBufSize, "Avg10s:%.2fHz", avgFreq10);
+  display.drawStr(0, 38, printBuf);
+  snprintf(printBuf, printBufSize, "Volt:%3.2fV M%d:%dus", lastMeasuredVoltage, servoMode, servoPulseWidth);
+  display.drawStr(0, 48, printBuf);
+  display.sendBuffer();
 }
 
 void setup() {
@@ -224,10 +278,8 @@ uint32_t i=0;
 int64_t lastDisplayUpdateTime = 0;
 
 void loop() {
-  int64_t period, pulse,last_PWM_Edge;
-
-  bool PWM_present=false;
-
+  int64_t period, pulse, last_PWM_Edge;
+  bool PWM_present = false;
   uint64_t now = esp_timer_get_time();
 
   i++;
@@ -236,13 +288,6 @@ void loop() {
   
   // Update servo output
   updateServoOutput();
-  
-  // Write servo PWM pulse using ledcWrite
-  // PWM duty = (pulse_width / period) * max_value
-  // For 10-bit resolution (max = 1023), and 20ms period:
-  // duty = (servoPulseWidth / 20000) * 1024
-  uint16_t dutyCycle = (uint16_t)((servoPulseWidth * 1024) / SERVO_PERIOD_US);
-  ledcWrite(0, dutyCycle);
 
   // Voltage measurement at 4 Hz rate
   if (now - lastVoltageMeasureTime >= voltageMeasureInterval) {
@@ -250,33 +295,34 @@ void loop() {
     lastVoltageMeasureTime = now;
   }
 
-  portENTER_CRITICAL(&mux); // start critical section to safely read volatile variables - block measurement ISR
+  // Read volatile variables safely
+  portENTER_CRITICAL(&mux);
   period = lastPeriod;
   pulse = lastPulseWidth;
   last_PWM_Edge = sawSignalLast;
-  portEXIT_CRITICAL(&mux); // end critical section -  unblock measurement ISR
+  portEXIT_CRITICAL(&mux);
 
   now = esp_timer_get_time();
-  PWM_present = (now - last_PWM_Edge < 2000000LL); // signal PWM_present if seen within last 2 second
- 
+  PWM_present = (now - last_PWM_Edge < 2000000LL);
 
+  // Calculate frequency
   float freqHz = 0.0;
   if (period > 0) freqHz = 1000000.0f / (float)period;
 
-  uint64_t window10Start = now - 10000000LL; // 10s window
-  uint64_t sumPeriod10 = 0;
-  size_t count10 = 0;
-  int64_t minPeriod = 0, maxPeriod = 0;
-  float avgFreq10 = 0.0f;
-/**/
+  // Update period samples
   if (period > 0 && period != lastLoggedPeriod) {
     periodSamples.emplace_back(now, period);
     lastLoggedPeriod = period;
   }
-  int64_t windowStart = now - 60000000LL; // 60s window
-  while (!periodSamples.empty() && periodSamples.front().first < windowStart) periodSamples.pop_front(); // remove old samples
+  
+  // Remove old samples (60s window)
+  int64_t windowStart = now - 60000000LL;
+  while (!periodSamples.empty() && periodSamples.front().first < windowStart) {
+    periodSamples.pop_front();
+  }
 
-
+  // Calculate min/max period
+  int64_t minPeriod = 0, maxPeriod = 0;
   if (!periodSamples.empty()) {
     minPeriod = periodSamples.front().second;
     maxPeriod = periodSamples.front().second;
@@ -286,60 +332,34 @@ void loop() {
     }
   }
 
-
-  for (const auto &p : periodSamples) if (p.first >= window10Start) { sumPeriod10 += p.second; ++count10; } //
- 
+  // Calculate 10-second average frequency
+  uint64_t window10Start = now - 10000000LL;
+  uint64_t sumPeriod10 = 0;
+  size_t count10 = 0;
+  for (const auto &p : periodSamples) {
+    if (p.first >= window10Start) {
+      sumPeriod10 += p.second;
+      ++count10;
+    }
+  }
+  
+  float avgFreq10 = 0.0f;
   if (count10 > 0) {
     uint64_t avgPeriod10 = sumPeriod10 / (int64_t)count10;
     if (avgPeriod10 > 0) avgFreq10 = 1000000.0f / (float)avgPeriod10;
   }
-/**/
+
+  // Update display at 4 Hz rate
   if (now - lastDisplayUpdateTime > 250000LL) {
-    // limit display update rate to 4 Hz
     lastDisplayUpdateTime = now;
-    delay(1); // allow time for Serial to flush
-//    snprintf(printBuf, printBufSize, "i=%5d  %8X", i, now);     
-//    snprintf(printBuf, printBufSize, "i=%8d ", i); 
-//    Serial.print(printBuf);
 
 
-// Limit the values to prevent display overrun & set default values when no PWM_present
+    // Limit values for display
+    limitValues(pulse, period, freqHz, avgFreq10, minPeriod, maxPeriod, PWM_present);
 
-  if (pulse > 2399) pulse=2399;
-  else if ((pulse < 199)||!PWM_present) pulse=199;
-  if ((period > 29999)||!PWM_present) period=29999;
-  else if (period < 999) period=999;
-  if (freqHz > 999) freqHz=999;
-  else if ((freqHz < 9)||!PWM_present) freqHz=9;  
-  if (avgFreq10 > 999) avgFreq10=999;
-  else if ((avgFreq10 < 9)||!PWM_present) avgFreq10=9;
-  if ((minPeriod > 29999)||!PWM_present) minPeriod=29999;
-  else if (minPeriod < 999) minPeriod=999;
-  if ((maxPeriod > 29999)||!PWM_present) maxPeriod=29999;
-  else if (maxPeriod < 999) maxPeriod=999;
-
-  if (PWM_present) {
-    snprintf(printBuf, printBufSize, "   Pulse=%5dus Period=%6dus Freq=%6.2fHz Avg10s=%6.2fHz Min60s=%6dus Max60s=%6dus Voltage=%3.2fV | Servo: Mode=%d PulseOut=%dus",
-            (int) pulse, (int)period, freqHz, avgFreq10, (int)minPeriod, (int)maxPeriod, lastMeasuredVoltage, servoMode, servoPulseWidth);
-  } else {
-    snprintf(printBuf, printBufSize, "NO Pulse=%5dus Period=%6dus Freq=%6.2fHz Avg10s=%6.2fHz Min60s=%6dus Max60s=%6dus Voltage=%3.2fV | Servo: Mode=%d PulseOut=%dus",
-            (int) pulse, (int)period, freqHz, avgFreq10, (int)minPeriod, (int)maxPeriod, lastMeasuredVoltage, servoMode, servoPulseWidth);
+    // Update serial output and display separately
+    updateSerial(PWM_present, pulse, period, freqHz, avgFreq10, minPeriod, maxPeriod);
+    updateDisplay(PWM_present, pulse, period, freqHz, avgFreq10);
   }
-  Serial.println(printBuf);
-  display.clearBuffer();
-
-  snprintf(printBuf, printBufSize, "PWM:%s", PWM_present?"YES":"NO");
-  display.drawStr(0, 8, printBuf);
-  snprintf(printBuf, printBufSize, "Pulse:%dus", (int)pulse);
-  display.drawStr(0, 18, printBuf);
-  snprintf(printBuf, printBufSize, "Prd:%dus Freq:%.2f", (int)period, freqHz);
-  display.drawStr(0, 28, printBuf);
-  snprintf(printBuf, printBufSize, "Avg10s:%.2fHz", avgFreq10);
-  display.drawStr(0, 38, printBuf);
-  snprintf(printBuf, printBufSize, "Volt:%3.2fV M%d:%dus", lastMeasuredVoltage, servoMode, servoPulseWidth);
-  display.drawStr(0, 48, printBuf);
-  display.sendBuffer();
-}
-
 }
 
