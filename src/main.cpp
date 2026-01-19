@@ -298,13 +298,13 @@ void loop() {
     // limit display update rate to 4 Hz
     lastDisplayUpdateTime = now;
     delay(1); // allow time for Serial to flush
-;;    snprintf(printBuf, printBufSize, "i=%5d  %8X", i, now);     
-    snprintf(printBuf, printBufSize, "i=%8d", i); 
-    Serial.print(printBuf);
+//    snprintf(printBuf, printBufSize, "i=%5d  %8X", i, now);     
+//    snprintf(printBuf, printBufSize, "i=%8d ", i); 
+//    Serial.print(printBuf);
 
 
 // Limit the values to prevent display overrun & set default values when no PWM_present
-/**/
+
   if (pulse > 2399) pulse=2399;
   else if ((pulse < 199)||!PWM_present) pulse=199;
   if ((period > 29999)||!PWM_present) period=29999;
@@ -317,7 +317,7 @@ void loop() {
   else if (minPeriod < 999) minPeriod=999;
   if ((maxPeriod > 29999)||!PWM_present) maxPeriod=29999;
   else if (maxPeriod < 999) maxPeriod=999;
-/**/
+
   if (PWM_present) {
     snprintf(printBuf, printBufSize, "   Pulse=%5dus Period=%6dus Freq=%6.2fHz Avg10s=%6.2fHz Min60s=%6dus Max60s=%6dus Voltage=%3.2fV | Servo: Mode=%d PulseOut=%dus",
             (int) pulse, (int)period, freqHz, avgFreq10, (int)minPeriod, (int)maxPeriod, lastMeasuredVoltage, servoMode, servoPulseWidth);
@@ -340,7 +340,6 @@ void loop() {
   display.drawStr(0, 48, printBuf);
   display.sendBuffer();
 }
-//  delay(20); // 4 Hz update rate = 250ms between updates
-//  delay(1000); // 4 Hz update rate = 250ms between updates
+
 }
 
